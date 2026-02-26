@@ -24,6 +24,8 @@
         background: rgba(29, 29, 29, 0.75);
         color: white;
         font-size: 12px;
+        max-width: 90vw;
+        word-break: break-all;
       }
     </style>
   </head>
@@ -40,6 +42,10 @@
 
         const loading = document.getElementById("loading");
 
+        function setLoading(msg) {
+          if (loading) loading.textContent = msg;
+        }
+
         function send(type, payload) {
           if (
             !window.ReactNativeWebView ||
@@ -51,72 +57,108 @@
           );
         }
 
+        function fail(msg) {
+          setLoading(msg);
+          send("map_error", { message: msg });
+        }
+
         function hideLoading() {
           if (loading) loading.style.display = "none";
         }
 
+        window.addEventListener("error", function (e) {
+          fail("Runtime error: " + (e.message || "unknown"));
+        });
+
         function initMap() {
-          const container = document.getElementById("map");
-          const map = new kakao.maps.Map(container, {
-            center: new kakao.maps.LatLng(lat, lng),
-            level: 4,
-          });
+          try {
+            if (!window.kakao || !window.kakao.maps) {
+              fail("Kakao SDK loaded but kakao.maps is undefined");
+              return;
+            }
 
-          let activeMarkers = [];
-
-          function clearMarkers() {
-            activeMarkers.forEach((m) => m.setMap(null));
-            activeMarkers = [];
-          }
-
-          window.renderFromApp = function renderFromApp(payload) {
-            const centerData =
-              payload && payload.center ? payload.center : { lat, lng };
-            const markers = Array.isArray(payload && payload.markers)
-              ? payload.markers
-              : [];
-
-            clearMarkers();
-            map.setCenter(
-              new kakao.maps.LatLng(centerData.lat, centerData.lng),
-            );
-
-            markers.forEach((p) => {
-              const marker = new kakao.maps.Marker({
-                map,
-                position: new kakao.maps.LatLng(p.lat, p.lng),
-              });
-
-              const info = new kakao.maps.InfoWindow({
-                content:
-                  '<div style="padding:6px 8px;font-size:12px;">' +
-                  p.name +
-                  "</div>",
-              });
-
-              kakao.maps.event.addListener(marker, "click", function () {
-                info.open(map, marker);
-                send("marker_click", p);
-              });
-
-              activeMarkers.push(marker);
+            const container = document.getElementById("map");
+            const map = new kakao.maps.Map(container, {
+              center: new kakao.maps.LatLng(lat, lng),
+              level: 4,
             });
-          };
 
-          hideLoading();
-          send("map_ready", { ok: true });
+            let activeMarkers = [];
+
+            function clearMarkers() {
+              activeMarkers.forEach((m) => m.setMap(null));
+              activeMarkers = [];
+            }
+
+            window.renderFromApp = function renderFromApp(payload) {
+              const centerData =
+                payload && payload.center ? payload.center : { lat, lng };
+              const markers = Array.isArray(payload && payload.markers)
+                ? payload.markers
+                : [];
+
+              clearMarkers();
+              map.setCenter(
+                new kakao.maps.LatLng(centerData.lat, centerData.lng),
+              );
+
+              markers.forEach((p) => {
+                const marker = new kakao.maps.Marker({
+                  map,
+                  position: new kakao.maps.LatLng(p.lat, p.lng),
+                });
+
+                const info = new kakao.maps.InfoWindow({
+                  content:
+                    '<div style="padding:6px 8px;font-size:12px;">' +
+                    p.name +
+                    "</div>",
+                });
+
+                kakao.maps.event.addListener(marker, "click", function () {
+                  info.open(map, marker);
+                  send("marker_click", p);
+                });
+
+                activeMarkers.push(marker);
+              });
+            };
+
+            hideLoading();
+            send("map_ready", { ok: true });
+          } catch (err) {
+            fail(
+              "initMap failed: " +
+                (err && err.message ? err.message : String(err)),
+            );
+          }
         }
 
         if (!kakaoKey) {
-          loading.textContent = "Missing kakaoKey query param";
+          fail("Missing kakaoKey query param");
           return;
         }
 
+        setTimeout(function () {
+          if (loading && loading.style.display !== "none") {
+            fail("Timeout loading Kakao SDK (check CSP/domain/key)");
+          }
+        }, 10000);
+
         const script = document.createElement("script");
-        script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(kakaoKey)}`;
-        script.onload = initMap;
+        script.src = `https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey=${encodeURIComponent(
+          kakaoKey,
+        )}`;
+        script.async = false;
+        script.onload = function () {
+          if (!window.kakao || !window.kakao.maps || !window.kakao.maps.load) {
+            fail("Kakao SDK loaded but kakao.maps.load is unavailable");
+            return;
+          }
+          window.kakao.maps.load(initMap);
+        };
         script.onerror = function () {
-          loading.textContent = "Failed to load Kakao SDK";
+          fail("Failed to load Kakao SDK (network/CSP/domain)");
         };
         document.head.appendChild(script);
       })();
