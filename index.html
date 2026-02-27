@@ -36,52 +36,62 @@
     <script>
       (function () {
         const params = new URLSearchParams(window.location.search);
-        const kakaoKey = params.get("kakaoKey") || "";
-        const lat = Number(params.get("lat") || 36.5);
-        const lng = Number(params.get("lng") || 127.8);
+        const kakaoKey = params.get('kakaoKey') || '';
+        const lat = Number(params.get('lat') || 36.5);
+        const lng = Number(params.get('lng') || 127.8);
 
-        const loading = document.getElementById("loading");
+        const loading = document.getElementById('loading');
 
         function setLoading(msg) {
           if (loading) loading.textContent = msg;
         }
 
         function send(type, payload) {
-          if (
-            !window.ReactNativeWebView ||
-            !window.ReactNativeWebView.postMessage
-          )
-            return;
-          window.ReactNativeWebView.postMessage(
-            JSON.stringify({ type, payload }),
-          );
+          const data = { type, payload };
+          if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+            window.ReactNativeWebView.postMessage(JSON.stringify(data));
+          }
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(data, '*');
+          }
         }
 
         function fail(msg) {
           setLoading(msg);
-          send("map_error", { message: msg });
+          send('map_error', { message: msg });
         }
 
         function hideLoading() {
-          if (loading) loading.style.display = "none";
+          if (loading) loading.style.display = 'none';
         }
 
-        window.addEventListener("error", function (e) {
-          fail("Runtime error: " + (e.message || "unknown"));
+        window.addEventListener('error', function (e) {
+          fail('Runtime error: ' + (e.message || 'unknown'));
         });
 
         function initMap() {
           try {
             if (!window.kakao || !window.kakao.maps) {
-              fail("Kakao SDK loaded but kakao.maps is undefined");
+              fail('Kakao SDK loaded but kakao.maps is undefined');
               return;
             }
 
-            const container = document.getElementById("map");
+            const container = document.getElementById('map');
             const map = new kakao.maps.Map(container, {
               center: new kakao.maps.LatLng(lat, lng),
               level: 4,
             });
+            const scheduleRelayout = function () {
+              try {
+                map.relayout();
+              } catch (err) {
+                // noop: relayout can fail briefly while webview/iframe is stabilizing.
+              }
+            };
+            requestAnimationFrame(scheduleRelayout);
+            setTimeout(scheduleRelayout, 150);
+            setTimeout(scheduleRelayout, 500);
+            window.addEventListener('resize', scheduleRelayout);
 
             let activeMarkers = [];
 
@@ -91,16 +101,11 @@
             }
 
             window.renderFromApp = function renderFromApp(payload) {
-              const centerData =
-                payload && payload.center ? payload.center : { lat, lng };
-              const markers = Array.isArray(payload && payload.markers)
-                ? payload.markers
-                : [];
+              const centerData = payload && payload.center ? payload.center : { lat, lng };
+              const markers = Array.isArray(payload && payload.markers) ? payload.markers : [];
 
               clearMarkers();
-              map.setCenter(
-                new kakao.maps.LatLng(centerData.lat, centerData.lng),
-              );
+              map.setCenter(new kakao.maps.LatLng(centerData.lat, centerData.lng));
 
               markers.forEach((p) => {
                 const marker = new kakao.maps.Marker({
@@ -109,56 +114,67 @@
                 });
 
                 const info = new kakao.maps.InfoWindow({
-                  content:
-                    '<div style="padding:6px 8px;font-size:12px;">' +
-                    p.name +
-                    "</div>",
+                  content: '<div style="padding:6px 8px;font-size:12px;">' + p.name + '</div>',
                 });
 
-                kakao.maps.event.addListener(marker, "click", function () {
+                kakao.maps.event.addListener(marker, 'click', function () {
                   info.open(map, marker);
-                  send("marker_click", p);
+                  send('marker_click', p);
                 });
 
                 activeMarkers.push(marker);
               });
             };
 
+            function handleBridgeMessage(event) {
+              try {
+                const message = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+                if (!message || message.type !== 'render_from_app') return;
+                window.renderFromApp(message.payload || {});
+              } catch (err) {
+                fail('Invalid bridge message: ' + (err && err.message ? err.message : String(err)));
+              }
+            }
+
+            // RN WebView bridge differs by platform: iOS uses window, Android can use document.
+            window.addEventListener('message', handleBridgeMessage);
+            document.addEventListener('message', handleBridgeMessage);
+
             hideLoading();
-            send("map_ready", { ok: true });
+            send('map_ready', { ok: true });
+            setTimeout(function () {
+              send('map_ready', { ok: true, retry: 1 });
+            }, 250);
           } catch (err) {
-            fail(
-              "initMap failed: " +
-                (err && err.message ? err.message : String(err)),
-            );
+            fail('initMap failed: ' + (err && err.message ? err.message : String(err)));
           }
         }
 
         if (!kakaoKey) {
-          fail("Missing kakaoKey query param");
+          fail('Missing kakaoKey query param');
           return;
         }
 
         setTimeout(function () {
-          if (loading && loading.style.display !== "none") {
-            fail("Timeout loading Kakao SDK (check CSP/domain/key)");
+          if (loading && loading.style.display !== 'none') {
+            fail('Timeout loading Kakao SDK (check CSP/domain/key)');
           }
         }, 10000);
 
-        const script = document.createElement("script");
+        const script = document.createElement('script');
         script.src = `https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey=${encodeURIComponent(
-          kakaoKey,
+          kakaoKey
         )}`;
         script.async = false;
         script.onload = function () {
           if (!window.kakao || !window.kakao.maps || !window.kakao.maps.load) {
-            fail("Kakao SDK loaded but kakao.maps.load is unavailable");
+            fail('Kakao SDK loaded but kakao.maps.load is unavailable');
             return;
           }
           window.kakao.maps.load(initMap);
         };
         script.onerror = function () {
-          fail("Failed to load Kakao SDK (network/CSP/domain)");
+          fail('Failed to load Kakao SDK (network/CSP/domain)');
         };
         document.head.appendChild(script);
       })();
