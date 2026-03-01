@@ -99,6 +99,26 @@
             let activeMarkers = [];
             let myLocationMarker = null;
             let myLocationCircle = null;
+            let viewportTick = null;
+
+            function emitViewportChanged() {
+              try {
+                const mapCenter = map.getCenter();
+                const bounds = map.getBounds();
+                const sw = bounds.getSouthWest();
+                const ne = bounds.getNorthEast();
+                send("map_viewport_changed", {
+                  center: { lat: mapCenter.getLat(), lng: mapCenter.getLng() },
+                  bounds: {
+                    sw: { lat: sw.getLat(), lng: sw.getLng() },
+                    ne: { lat: ne.getLat(), lng: ne.getLng() },
+                  },
+                  level: map.getLevel(),
+                });
+              } catch (err) {
+                // noop
+              }
+            }
 
             function clearMarkers() {
               activeMarkers.forEach((m) => m.setMap(null));
@@ -141,8 +161,8 @@
             }
 
             window.renderFromApp = function renderFromApp(payload) {
-              const centerData =
-                payload && payload.center ? payload.center : { lat, lng };
+              const centerData = payload && payload.center ? payload.center : null;
+              const moveCenter = !!(payload && payload.moveCenter);
               const markers = Array.isArray(payload && payload.markers)
                 ? payload.markers
                 : [];
@@ -150,9 +170,14 @@
                 payload && payload.myLocation ? payload.myLocation : null;
 
               clearMarkers();
-              map.setCenter(
-                new kakao.maps.LatLng(centerData.lat, centerData.lng),
-              );
+              if (
+                moveCenter &&
+                centerData &&
+                typeof centerData.lat === "number" &&
+                typeof centerData.lng === "number"
+              ) {
+                map.setCenter(new kakao.maps.LatLng(centerData.lat, centerData.lng));
+              }
               renderMyLocation(myLocation);
 
               markers.forEach((p) => {
@@ -175,6 +200,9 @@
 
                 activeMarkers.push(marker);
               });
+
+              if (viewportTick) clearTimeout(viewportTick);
+              viewportTick = setTimeout(emitViewportChanged, 0);
             };
 
             function handleBridgeMessage(event) {
@@ -196,6 +224,9 @@
             // RN WebView bridge differs by platform: iOS uses window, Android can use document.
             window.addEventListener("message", handleBridgeMessage);
             document.addEventListener("message", handleBridgeMessage);
+            kakao.maps.event.addListener(map, "idle", function () {
+              emitViewportChanged();
+            });
 
             hideLoading();
             send("map_ready", { ok: true });
